@@ -1,9 +1,21 @@
-from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver # <-- Add this import
-from app.state import AgentState
-from app.agents.researcher import research_node
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph
+
 from app.agents.critic import critic_node
+from app.agents.researcher import research_node
 from app.agents.writer import writer_node
+from app.config import load_settings
+from app.state import AgentState
+
+
+def _route_after_critic(state: AgentState) -> str:
+    settings = load_settings(validate_keys=False)
+    if state.get("is_satisfactory"):
+        return "writer"
+    if state.get("revision_count", 0) >= settings.max_revisions:
+        return "writer"
+    return "researcher"
+
 
 def create_research_graph():
     workflow = StateGraph(AgentState)
@@ -14,19 +26,14 @@ def create_research_graph():
 
     workflow.set_entry_point("researcher")
     workflow.add_edge("researcher", "critic")
-
     workflow.add_conditional_edges(
         "critic",
-        lambda state: "writer" if state["is_satisfactory"] else "researcher",
-        {"writer": "writer", "researcher": "researcher"}
+        _route_after_critic,
+        {"writer": "writer", "researcher": "researcher"},
     )
     workflow.add_edge("writer", END)
 
-    # Initialize memory
-    memory = MemorySaver() # <-- Create the checkpointer
-
-    # Compile with memory and interrupt before the writer acts
     return workflow.compile(
-        checkpointer=memory, 
-        interrupt_before=["writer"] # <-- Pause for human approval
+        checkpointer=MemorySaver(),
+        interrupt_before=["writer"],
     )
